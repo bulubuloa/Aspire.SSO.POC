@@ -1,0 +1,32 @@
+# ── Build output ─────────────────────────────────────────────
+bin/
+obj/
+*.user
+node_modules/
+.expo/
+dist/
+web-build/
+
+# ── OS / editor / tooling ────────────────────────────────────
+.DS_Store
+*.log
+.claude/
+.playwright-mcp/
+
+# ── Secrets ──────────────────────────────────────────────────
+# appsettings.json IS committed — it holds demo values only.
+# Real secrets come from env vars at deploy time:
+#   Client__Aspire__ClientSecret
+#   Aspire__RegisteredClients__0__ClientSecret
+appsettings.Local.json
+appsettings.Production.json
+.env
+.env.local
+*.pem
+*.key
+
+# ── Internal documents ───────────────────────────────────────
+# THIS REPO IS PUBLIC. The client SSO guides are marked
+# "Draft for internal review before client sharing" — they are not
+# ours to publish. Remove this rule only if that has been cleared.
+*.docx

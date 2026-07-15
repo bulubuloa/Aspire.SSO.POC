@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Demo Client",
+    "slug": "omnicasa-mobile-sso-demo",
+    "scheme": "democlient",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.omnicasa.ssodemo"
+    },
+    "android": {
+      "package": "com.omnicasa.ssodemo"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font",
+      "expo-secure-store"
+    ]
+  }
+}
