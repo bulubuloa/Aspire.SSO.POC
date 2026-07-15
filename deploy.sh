@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 #
-# Deploy the SSO demo to Render (free tier), or verify a deployment.
+# Check or verify the SSO demo deployment (VPS + Caddy, deployed by CI on push to main).
 #
-#   ./deploy.sh check      — validate everything before you push (no network)
-#   ./deploy.sh urls       — print the env vars to set, given your domain
-#   ./deploy.sh verify     — run the full test suite against the live URLs
-#
-# Render itself deploys from git: push this repo, then New + → Blueprint → pick it.
-# render.yaml declares all three services. This script handles everything around that.
+#   ./deploy.sh check                       — validate everything locally before pushing
+#   ./deploy.sh urls <domain>               — print the env vars for a domain
+#   CLIENT_SECRET=… ./deploy.sh verify <client-url> <aspire-url>
+#                                           — run the full suite against a live deployment
 #
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -22,12 +20,11 @@ FAILED=0
 cmd_check() {
   echo "${BOLD}Pre-flight${OFF}"
 
-  [ -f render.yaml ] && ok "render.yaml present" || bad "render.yaml missing"
-  for f in backend/Client.Demo/Dockerfile backend/Aspire.Sso/Dockerfile; do
+  for f in deploy/docker-compose.yml deploy/Caddyfile backend/Client.Demo/Dockerfile backend/Aspire.Sso/Dockerfile; do
     [ -f "$f" ] && ok "$f" || bad "$f missing"
   done
 
-  # Both services must build before Render wastes 5 minutes discovering they don't.
+  # Both must build before CI wastes 5 minutes discovering they don't.
   for p in backend/Client.Demo backend/Aspire.Sso; do
     if (cd "$p" && dotnet build -c Release 2>&1 | grep -q "Build succeeded"); then
       ok "$(basename $p) builds"
@@ -36,7 +33,7 @@ cmd_check() {
     fi
   done
 
-  # The web export is what Render will run for the static site.
+  # The web export is what Caddy serves as the static site.
   if (cd mobile && CI=1 npx expo export --platform web --output-dir /tmp/_deploy_check >/dev/null 2>&1); then
     ok "mobile web export builds"; rm -rf /tmp/_deploy_check
   else
@@ -51,7 +48,7 @@ cmd_check() {
     echo "      Client__Aspire__ClientSecret / Aspire__RegisteredClients__0__ClientSecret"
     echo "      generate one:  openssl rand -hex 24"
   fi
-  grep -q "sync: false" render.yaml && ok "render.yaml marks secrets as sync:false (never committed)"
+  grep -q "CLIENT_SECRET" deploy/docker-compose.yml && ok "compose takes the secret from .env on the box (never committed)"
 
   echo
   [ $FAILED -eq 0 ] && echo "${GREEN}Ready to deploy.${OFF}" || echo "${RED}Fix the above first.${OFF}"
@@ -112,7 +109,7 @@ cmd_verify() {
     return 1
   fi
 
-  echo "${BOLD}Waking the services${OFF} (free tier sleeps after ~15 min idle — first hit is slow)"
+  echo "${BOLD}Reachable?${OFF}"
   for u in "$client/api/rewards" "$aspire/api/session"; do
     local code; code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$u")
     [[ "$code" =~ ^(200|401)$ ]] && ok "$u → $code" || bad "$u → $code"
@@ -138,6 +135,8 @@ cmd_verify() {
 
   echo
   echo "${BOLD}Full suite${OFF}"
+  # The deployed secret lives in the environment, not appsettings.json — pass it through if set.
+  #   CLIENT_SECRET=… ./deploy.sh verify <client> <aspire>
   CLIENT_URL="$client" ASPIRE_URL="$aspire" ./test.sh
 }
 

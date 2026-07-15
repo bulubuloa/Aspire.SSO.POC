@@ -64,9 +64,12 @@ check "unknown user → 401"   "Not authenticated"                  "$(redeem '{
 
 echo
 echo "── Aspire SSO endpoint, direct ────────────────────────"
-CREDS=$(printf '%s' "$(python3 -c "
-import json;c=json.load(open('backend/Client.Demo/appsettings.json'))['Client']['Aspire']
-print(f\"{c['ClientId']}:{c['ClientSecret']}\")")" | base64)
+# Locally the demo values in appsettings.json are the live ones. Against a real deployment they
+# are not — the secret comes from the environment there — so allow an override.
+#   CLIENT_ID=… CLIENT_SECRET=… ./test.sh
+_ID=${CLIENT_ID:-$(python3 -c "import json;print(json.load(open('backend/Client.Demo/appsettings.json'))['Client']['Aspire']['ClientId'])")}
+_SECRET=${CLIENT_SECRET:-$(python3 -c "import json;print(json.load(open('backend/Client.Demo/appsettings.json'))['Client']['Aspire']['ClientSecret'])")}
+CREDS=$(printf '%s' "$_ID:$_SECRET" | base64)
 T=$(post $C/api/jwt '{"username":"jane"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 check "no credentials → 401"  "Invalid or missing client credentials" \
   "$(curl -s -X POST $A/sso/jwt -H 'Content-Type: application/json' -H 'Accept: application/json' -d "{\"token\":\"$T\"}")"

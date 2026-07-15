@@ -33,15 +33,21 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAn
 
 var app = builder.Build();
 
-// Hosted behind a TLS-terminating proxy (Render/nginx), so the scheme arrives in a header.
-// Without this req.IsHttps is false and the session cookie would be issued as Lax, which the
-// client's web app cannot use cross-site. Also makes launchUrl https rather than http.
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+// Hosted behind a TLS-terminating proxy (Caddy), so the scheme arrives in a header.
+// Without this req.IsHttps is false: the session cookie is issued Lax-without-Secure and
+// launchUrl comes back http — which silently breaks the cross-site web handoff.
+//
+// KnownNetworks/KnownProxies default to loopback ONLY, and Caddy reaches us from a docker
+// network address — so they must be CLEARED, not left empty. `KnownNetworks = { }` in an
+// object initializer adds nothing; it does not clear. Safe here because the only route in
+// is Caddy: the app port is never published and ufw allows just 22/80/443.
+var fwd = new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost,
-    KnownNetworks = { },   // trust the platform proxy
-    KnownProxies = { },
-});
+};
+fwd.KnownNetworks.Clear();
+fwd.KnownProxies.Clear();
+app.UseForwardedHeaders(fwd);
 
 app.UseStaticFiles();   // aspire-theme.css + favicon for the reward page
 app.UseCors();
