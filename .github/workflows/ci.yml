@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push makes an in-flight run pointless — cancel it.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build both services
+        run: |
+          dotnet build backend/Aspire.Sso  -c Release
+          dotnet build backend/Client.Demo -c Release
+
+      # Start them exactly as the demo runs: two processes, talking over HTTP.
+      # Run the built DLL rather than `dotnet run` — launchSettings can override --urls,
+      # and the content root must be the folder holding appsettings.json.
+      - name: Start services
+        run: |
+          (cd backend/Aspire.Sso/bin/Release/net10.0  && dotnet Aspire.Sso.dll  --urls http://0.0.0.0:6001 &> /tmp/aspire.log &)
+          (cd backend/Client.Demo/bin/Release/net10.0 && dotnet Client.Demo.dll --urls http://0.0.0.0:5001 &> /tmp/client.log &)
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:5001/api/rewards \
+              && curl -s -o /dev/null http://localhost:6001/api/session && exit 0
+            sleep 2
+          done
+          echo "::error::services did not come up"
+          echo "--- aspire ---"; cat /tmp/aspire.log
+          echo "--- client ---"; cat /tmp/client.log
+          exit 1
+
+      - name: Run the suite
+        run: ./test.sh
+
+      - name: Service logs
+        if: failure()
+        run: |
+          echo "--- aspire ---"; cat /tmp/aspire.log
+          echo "--- client ---"; cat /tmp/client.log
+
+  web:
+    name: Build the app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - run: npm ci
+        working-directory: mobile
+
+      # Every target must bundle — a web-only check would miss native breakage.
+      - name: Bundle for web, iOS and Android
+        working-directory: mobile
+        run: |
+          for p in web ios android; do
+            echo "::group::$p"
+            CI=1 npx expo export --platform $p --output-dir "/tmp/export-$p"
+            echo "::endgroup::"
+          done
+
+  deploy:
+    name: Deploy to Render
+    needs: [test, web]              # only if both passed
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render
+        env:
+          # Optional. Without these the job no-ops and Render's own auto-deploy
+          # (autoDeploy: true in render.yaml) handles it instead.
+          CLIENT_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_CLIENT }}
+          ASPIRE_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_ASPIRE }}
+          DEMO_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_DEMO }}
+        run: |
+          if [ -z "$CLIENT_HOOK" ]; then
+            echo "No deploy hooks set — relying on Render's built-in auto-deploy."
+            echo "To gate deploys on this workflow: set autoDeploy:false in render.yaml and add"
+            echo "RENDER_DEPLOY_HOOK_{CLIENT,ASPIRE,DEMO} as repo secrets."
+            exit 0
+          fi
+          # Aspire first: the client calls it, so it should be up before the client rolls.
+          for hook in "$ASPIRE_HOOK" "$CLIENT_HOOK" "$DEMO_HOOK"; do
+            [ -n "$hook" ] && curl -fsS -X POST "$hook" > /dev/null && echo "triggered"
+          done
