@@ -106,6 +106,10 @@ jobs:
             docker image prune -f            # 20GB disk — don't hoard old layers
 
       - name: Verify it's actually live
+        env:
+          # The deployed secret lives in /opt/sso/.env on the box, not in appsettings.json.
+          # Without it the direct-to-Aspire credential tests would use the fake demo value.
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
         run: |
           sleep 20
           ./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
