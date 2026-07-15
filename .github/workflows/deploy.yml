@@ -1,0 +1,111 @@
+name: Deploy
+
+# Builds the images here (the 1GB VPS would OOM compiling .NET), pushes them to ghcr.io,
+# then tells the box to pull. Only runs if CI passed.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  images:
+    name: Build & push images
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: client
+            context: backend/Client.Demo
+          - name: aspire
+            context: backend/Aspire.Sso
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # built-in, no PAT needed
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/aspire-sso-poc-${{ matrix.name }}:latest
+            ghcr.io/${{ github.repository_owner }}/aspire-sso-poc-${{ matrix.name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  web:
+    name: Build the web app
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: mobile/package-lock.json }
+      - run: npm ci
+        working-directory: mobile
+      - name: Export
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_BACKEND_URL: https://client.aspireservice.online
+        run: CI=1 npx expo export --platform web --output-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: mobile/dist
+
+  ship:
+    name: Ship to the VPS
+    needs: [images, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: web, path: web }
+
+      - name: Copy the web build + compose files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "web/*,deploy/docker-compose.yml,deploy/Caddyfile"
+          target: /opt/sso-staging
+          strip_components: 0
+          overwrite: true
+
+      - name: Pull the new images and restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            # Swap in the new web build atomically-ish, keep .env (it holds the secret)
+            rm -rf /opt/sso/demo.new && cp -r /opt/sso-staging/web /opt/sso/demo.new
+            cp /opt/sso-staging/deploy/docker-compose.yml /opt/sso/
+            cp /opt/sso-staging/deploy/Caddyfile /opt/sso/
+            rm -rf /opt/sso/demo.old
+            [ -d /opt/sso/demo ] && mv /opt/sso/demo /opt/sso/demo.old
+            mv /opt/sso/demo.new /opt/sso/demo
+            rm -rf /opt/sso-staging
+
+            cd /opt/sso
+            docker compose pull client aspire
+            docker compose up -d
+            docker image prune -f            # 20GB disk — don't hoard old layers
+
+      - name: Verify it's actually live
+        run: |
+          sleep 20
+          ./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online

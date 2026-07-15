@@ -78,33 +78,25 @@ on that reward, already signed in. Confirm, then **CLOSE AND RETURN TO THE APP**
 
 ---
 
-## Deploy (Render, free tier)
+## Deploy
+
+Live at **https://demo.aspireservice.online** (client `client.` · Aspire `aspire.`).
+
+Hosted on a small VPS behind **Caddy** (automatic Let's Encrypt). Images are built by CI and
+pulled by the box — a 1GB VPS cannot compile .NET without OOMing.
+
+**One-time, on the VPS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/bulubuloa/Aspire.SSO.POC/main/deploy-vps.sh | sudo bash
+```
+Sets up swap, Docker, ufw, and `/opt/sso/.env` (generates the client secret). Then point three
+A records at the box and add `VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` as GitHub secrets.
+
+**After that it is automatic** — push to `main` → CI runs the 34 tests → images build → the VPS
+pulls → `deploy.sh verify` confirms it is live.
 
 ```bash
-./deploy.sh check                 # builds all 3, catches problems before Render does
+./deploy-vps.sh status     # on the box: containers, memory, endpoint codes
+./deploy-vps.sh logs       # tail
+./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
 ```
-
-1. Push this repo to GitHub.
-2. Render → **New +** → **Blueprint** → pick the repo. `render.yaml` declares all three services.
-3. Get the env vars for your domain:
-   ```bash
-   ./deploy.sh urls yourdomain.com     # prints DNS + every env var, generates a secret
-   ```
-4. Paste them into each service's **Environment**, attach your domains, redeploy.
-5. Verify against the live URLs:
-   ```bash
-   ./deploy.sh verify https://client.yourdomain.com https://aspire.yourdomain.com
-   ```
-
-| Service | Is | Public URL |
-|---|---|---|
-| `client` | Client.Demo (Docker) | `client.yourdomain.com` |
-| `aspire` | Aspire.Sso (Docker) | `aspire.yourdomain.com` |
-| `demo` | Expo web (static) | `demo.yourdomain.com` |
-
-**Free tier sleeps after ~15 min idle** — the first request takes ~50s. Sessions and keys are
-in-memory, so a sleep logs everyone out and rotates the signing key (Aspire re-fetches the JWKS
-automatically).
-
-The cookie switches itself: `SameSite=Lax` on local HTTP, `SameSite=None; Secure` over HTTPS —
-which the web demo needs, because `demo.` and `aspire.` are cross-site once they are real domains.

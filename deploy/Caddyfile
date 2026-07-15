@@ -1,0 +1,28 @@
+# Caddy terminates TLS and gets Let's Encrypt certs automatically — no certbot, no cron.
+# It also sets X-Forwarded-Proto, which is what makes Aspire issue `SameSite=None; Secure`
+# cookies and https launchUrls (see UseForwardedHeaders in both services).
+
+{
+	email {$ACME_EMAIL}
+}
+
+# ── The client's system ───────────────────────────────────────
+client.aspireservice.online {
+	reverse_proxy client:8080
+	encode gzip
+}
+
+# ── Aspire's SSO ──────────────────────────────────────────────
+aspire.aspireservice.online {
+	reverse_proxy aspire:8080
+	encode gzip
+}
+
+# ── The Expo web build (static) ───────────────────────────────
+demo.aspireservice.online {
+	root * /srv/demo
+	encode gzip
+	# Expo web is a single-page app — unknown paths must still serve index.html.
+	try_files {path} /index.html
+	file_server
+}
