@@ -6,6 +6,7 @@ namespace Aspire.Sso;
 public sealed class AspireOptions
 {
     public string Audience { get; set; } = "";
+    public string SamlEntityId { get; set; } = "";   // our SP identity (SAML only)
     public int ClockSkewSeconds { get; set; } = 30;
     public int LaunchTicketSeconds { get; set; } = 60;
 
@@ -19,7 +20,9 @@ public sealed class AspireOptions
         public string ClientSecret { get; set; } = "";   // secret — hash at rest in production
         public string Name { get; set; } = "";
         public string Issuer { get; set; } = "";         // expected `iss`
-        public string JwksUrl { get; set; } = "";        // where we fetch their public keys
+        public string JwksUrl { get; set; } = "";        // where we fetch their public keys (JWT)
+        public string SamlEntityId { get; set; } = "";   // their IdP identity (SAML)
+        public string SamlMetadataUrl { get; set; } = ""; // where we fetch their signing cert (SAML)
         public string ReturnUrl { get; set; } = "";      // deep link back to their app when done
         }
 

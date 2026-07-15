@@ -7,6 +7,7 @@ public sealed class ClientOptions
 {
     public string Issuer { get; set; } = "";
     public string SigningKeyId { get; set; } = "";
+    public string SamlEntityId { get; set; } = "";   // our IdP identity, only used for SAML
 
     public AspireIntegrationOptions Aspire { get; set; } = new();
     public TokenOptions Tokens { get; set; } = new();
@@ -16,7 +17,8 @@ public sealed class ClientOptions
     // What Aspire gave us during onboarding. This is the whole integration contract.
     public sealed class AspireIntegrationOptions
     {
-        public string SsoEndpoint { get; set; } = "";     // where we POST the token
+        public string SsoEndpoint { get; set; } = "";     // where we POST the token (JWT)
+        public string SamlAcsUrl { get; set; } = "";      // where the browser POSTs the assertion (SAML)
         public string Audience { get; set; } = "";        // the `aud` Aspire expects
         public string ClientId { get; set; } = "";        // issued by Aspire
         public string ClientSecret { get; set; } = "";    // issued by Aspire — secret

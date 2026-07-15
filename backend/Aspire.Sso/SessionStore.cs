@@ -12,6 +12,7 @@ public sealed class SessionStore
 
     private readonly ConcurrentDictionary<string, AspireSession> _sessions = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _usedJti = new();     // jti -> expiry
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _usedSaml = new();    // assertion id -> expiry
     private readonly ConcurrentDictionary<string, LaunchTicket> _tickets = new();       // one-time browser bootstrap
 
     public record AspireSession(string Id, string Sub, string Email, string DisplayName,
@@ -29,7 +30,19 @@ public sealed class SessionStore
         return _usedJti.TryAdd(jti, expiryUtc);
     }
 
+    // --- Replay protection (SAML assertion id) — same idea, different protocol ---
+    public bool TryConsumeSamlId(string assertionId, DateTimeOffset expiryUtc)
+    {
+        Sweep();
+        return _usedSaml.TryAdd(assertionId, expiryUtc);
+    }
+
     // --- Sessions ---
+    // SAML path: identity arrives as assertion attributes rather than JWT claims.
+    public AspireSession CreateSession(SamlValidator.SamlSubject u, string via, string? clientId = null) =>
+        CreateSession(new JwtValidator.ValidatedUser(u.Sub, u.Email, u.DisplayName, u.Country, u.Program),
+                      via, u.Target, clientId);
+
     public AspireSession CreateSession(JwtValidator.ValidatedUser user, string via, string? target = null, string? clientId = null)
     {
         var s = new AspireSession(
@@ -69,6 +82,7 @@ public sealed class SessionStore
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var kv in _usedJti) if (kv.Value < now) _usedJti.TryRemove(kv.Key, out _);
+        foreach (var kv in _usedSaml) if (kv.Value < now) _usedSaml.TryRemove(kv.Key, out _);
         foreach (var kv in _tickets) if (kv.Value.ExpiresUtc < now) _tickets.TryRemove(kv.Key, out _);
     }
 }

@@ -30,7 +30,7 @@ services:
       Client__Aspire__SsoEndpoint: "https://aspire.aspireservice.online/sso/jwt"
       Client__Aspire__ClientSecret: ${CLIENT_SECRET:?set CLIENT_SECRET in .env}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/rewards"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/rewards"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -45,8 +45,8 @@ services:
       Aspire__RegisteredClients__0__ClientSecret: ${CLIENT_SECRET:?}    # must match the client's
       Aspire__RegisteredClients__0__ReturnUrl: "democlient://redeemed"
     healthcheck:
-      # 401 without a session is a healthy 'up'
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/session || true"]
+      # 401 without a session IS healthy — the endpoint answering is the signal.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/session | grep -q 401"]
       interval: 30s
       timeout: 5s
       retries: 3
