@@ -1,4 +1,4 @@
-# Omnicasa Mobile SSO — Demo
+# Aspire SSO — Demo
 
 **Silent SSO on Redeem.** A customer already logged into the client's app taps REDEEM and lands
 inside an Aspire reward page, already authenticated — **without ever seeing an Aspire login**.
