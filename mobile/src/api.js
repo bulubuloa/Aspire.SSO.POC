@@ -22,15 +22,19 @@ export async function getRewards() {
   return res.json();
 }
 
-// --- Redeem: the silent handoff ---
-// The client backend signs the JWT and hands it to Aspire back-channel, then returns a
-// one-time launch URL. The customer sees no login — just the reward page opening.
+// --- Redeem: the handoff ---
+// mode 'jwt'  → client backend signs + POSTs to Aspire back-channel; returns a launch URL.
+//               Fully silent; the token never touches the browser.
+// mode 'saml' → returns a URL to the client's OWN IdP, which signs an assertion and
+//               auto-POSTs it to Aspire's ACS. SAML's HTTP-POST binding needs the browser,
+//               so this one cannot be back-channel.
+// Either way the customer types nothing.
 // `scenario` is a demo-only hook for negative testing.
-export async function redeem(username, rewardId, scenario) {
+export async function redeem(username, rewardId, mode, scenario) {
   const res = await fetch(`${BACKEND_URL}/api/redeem`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, rewardId, scenario: scenario || null }),
+    body: JSON.stringify({ username, rewardId, mode: mode || 'jwt', scenario: scenario || null }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Redeem failed');

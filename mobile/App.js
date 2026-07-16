@@ -30,6 +30,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [redeeming, setRedeeming] = useState(null); // reward id mid-handoff
   const [rewardUrl, setRewardUrl] = useState(null);  // web: in-page browser overlay
+  const [mode, setMode] = useState('jwt');           // demo switch: jwt | saml
+  const [scenario, setScenario] = useState('');      // demo switch: negative tests
   const [redeemed, setRedeemed] = useState([]);      // reward ids confirmed this session
   const [u, setU] = useState('');
   const [p, setP] = useState('');
@@ -80,7 +82,7 @@ export default function App() {
   async function onRedeem(reward) {
     setRedeeming(reward.id);
     try {
-      const { launchUrl } = await redeem(session.username, reward.id);
+      const { launchUrl } = await redeem(session.username, reward.id, mode, scenario);
       // Native: an in-app browser sheet. Web: an in-page overlay — a popup tab reads as
       // "we navigated you away", which is not what the native handoff looks like.
       if (Platform.OS === 'web') { setRewardUrl(launchUrl); return; }
@@ -229,6 +231,36 @@ export default function App() {
           </>
         ) : (
           <>
+            {/* Demo switches — a real client app would ship neither of these. */}
+            <View style={[s.card, s.demoBar]}>
+              <View style={s.demoRow}>
+                <Text style={s.demoLbl}>SSO MODE</Text>
+                <View style={s.seg}>
+                  {[['jwt', 'JWT'], ['saml', 'SAML 2.0']].map(([v, l]) => (
+                    <TouchableOpacity key={v} style={[s.segBtn, mode === v && s.segOn]} onPress={() => setMode(v)}>
+                      <Text style={[s.segTxt, mode === v && s.segTxtOn]}>{l}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              <View style={[s.demoRow, { marginTop: 10 }]}>
+                <Text style={s.demoLbl}>SCENARIO</Text>
+                <View style={s.chips}>
+                  {[['', 'Happy'], ['expired', 'Expired'], ['wrong-aud', 'Wrong aud'], ['tampered', 'Tampered'], ['bad-secret', 'Bad secret']].map(([v, l]) => (
+                    <TouchableOpacity key={v || 'ok'} style={[s.chip, scenario === v && s.chipOn]} onPress={() => setScenario(v)}>
+                      <Text style={[s.chipTxt, scenario === v && s.chipTxtOn]}>{l}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              <Text style={s.demoHint}>
+                {mode === 'jwt'
+                  ? 'JWT — signed server-side and POSTed to Aspire back-channel. The token never reaches this app.'
+                  : 'SAML — the browser carries the signed assertion to Aspire. You will see it redirect.'}
+                {scenario ? '  ·  Redeem should be REJECTED.' : ''}
+              </Text>
+            </View>
+
             {/* Featured — large cards */}
             {featured.map((o) => (
               <View key={o.id} style={[s.card, { padding: 0, overflow: 'hidden' }]}>
@@ -341,6 +373,22 @@ const s = StyleSheet.create({
   bigPtsLbl: { color: T.faint, fontSize: 9, fontWeight: '700', letterSpacing: 0.8 },
   bigBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: T.blue, borderRadius: T.pill, paddingHorizontal: 20, paddingVertical: 12, minWidth: 118, justifyContent: 'center' },
   bigBtnTxt: { color: T.onBlue, fontWeight: '800', fontSize: 12, letterSpacing: 0.5 },
+
+  // demo switch
+  demoBar: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: T.border },
+  demoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  demoLbl: { color: T.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.8, width: 62 },
+  demoHint: { color: T.faint, fontSize: 10, marginTop: 10, lineHeight: 14 },
+  seg: { flexDirection: 'row', backgroundColor: '#e2e8f0', borderRadius: 8, padding: 3, flex: 1 },
+  segBtn: { flex: 1, paddingVertical: 6, borderRadius: 6, alignItems: 'center' },
+  segOn: { backgroundColor: T.blue },
+  segTxt: { color: T.muted, fontWeight: '700', fontSize: 11 },
+  segTxtOn: { color: T.onBlue },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, flex: 1 },
+  chip: { backgroundColor: '#e2e8f0', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
+  chipOn: { backgroundColor: T.danger },
+  chipTxt: { color: T.muted, fontSize: 10, fontWeight: '600' },
+  chipTxtOn: { color: '#fff' },
 
   offer: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderTopWidth: 1, borderTopColor: T.border },
   offerIco: { width: 40, height: 40, borderRadius: T.radiusSm, backgroundColor: T.blueSoft, alignItems: 'center', justifyContent: 'center' },
