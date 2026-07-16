@@ -81,14 +81,19 @@ echo "── Aspire SSO endpoint, direct ─────────────
 #   CLIENT_ID=… CLIENT_SECRET=… ./test.sh
 _ID=${CLIENT_ID:-$(python3 -c "import json;print(json.load(open('backend/Client.Demo/appsettings.json'))['Client']['Aspire']['ClientId'])")}
 _SECRET=${CLIENT_SECRET:-$(python3 -c "import json;print(json.load(open('backend/Client.Demo/appsettings.json'))['Client']['Aspire']['ClientSecret'])")}
-CREDS=$(printf '%s' "$_ID:$_SECRET" | base64)
 T=$(post $C/api/jwt '{"username":"jane"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
-check "no credentials → 401"  "Invalid or missing client credentials" \
-  "$(curl -s -X POST $A/sso/jwt -H 'Content-Type: application/json' -H 'Accept: application/json' -d "{\"token\":\"$T\"}")"
-check "with credentials → ok" '"ok":true' \
-  "$(curl -s -X POST $A/sso/jwt -H 'Content-Type: application/json' -H 'Accept: application/json' -H "Authorization: Basic $CREDS" -d "{\"token\":\"$T\"}")"
-check "replay same jti → 401" "Replay detected" \
-  "$(curl -s -X POST $A/sso/jwt -H 'Content-Type: application/json' -H 'Accept: application/json' -H "Authorization: Basic $CREDS" -d "{\"token\":\"$T\"}")"
+# Let curl build the Basic header. Hand-rolling `base64` wraps at 76 chars on GNU coreutils, and a
+# newline in the header makes curl fail silently — the real 48-char secret tripped this, the short
+# demo one never did.
+sso_jwt() { # sso_jwt [auth]
+  local creds=(); [ -n "${1:-}" ] && creds=(-u "$_ID:$_SECRET")   # array: a secret with spaces must survive
+  # ${a[@]+"${a[@]}"} — bash 3.2 (macOS) calls a plain "${a[@]}" unbound when empty under set -u
+  curl -s -X POST $A/sso/jwt -H 'Content-Type: application/json' -H 'Accept: application/json' \
+       ${creds[@]+"${creds[@]}"} -d "{\"token\":\"$T\"}"
+}
+check "no credentials → 401"  "Invalid or missing client credentials" "$(sso_jwt)"
+check "with credentials → ok" '"ok":true'      "$(sso_jwt auth)"
+check "replay same jti → 401" "Replay detected" "$(sso_jwt auth)"
 
 echo
 echo "── token contract ─────────────────────────────────────"
