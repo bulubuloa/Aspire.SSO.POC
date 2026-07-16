@@ -104,6 +104,9 @@ jobs:
             cd /opt/sso
             docker compose pull client aspire
             docker compose up -d
+            # Caddy bind-mounts the Caddyfile and does NOT watch it — `up -d` won't touch the
+            # unchanged caddy container, so a domain change needs an explicit graceful reload.
+            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
             docker image prune -f            # 20GB disk — don't hoard old layers
 
       - name: Verify it's actually live
