@@ -3,8 +3,10 @@
 **Silent SSO on Redeem.** A customer already logged into the client's app taps REDEEM and lands
 inside an Aspire reward page, already authenticated — **without ever seeing an Aspire login**.
 
-Implements the JWT path from `Client_JWT_Based_SSO_Implementation_Guide_vFinal 1.docx`.
-Two flows only: **login** (client-owned) and **redeem** (the SSO handoff).
+Implements **both** paths from the client guides — **JWT** and **SAML 2.0** — switchable at runtime.
+Two flows: **login** (client-owned) and **redeem** (the SSO handoff).
+
+**Live:** <https://demo.aspireservice.online>
 
 ---
 
@@ -46,9 +48,12 @@ cd mobile && npm install
 npx expo start --web        # browser — fastest; or --ios / --android
 ```
 
-Sign in as `jane` / `demo`, open the **Reward** tab, tap **REDEEM** → the crimson Aspire page opens
-on that reward, already signed in. Confirm, then **CLOSE AND RETURN TO THE APP** → the reward shows
-**✓ REDEEMED**. The blue→crimson switch *is* the handoff.
+Sign in as `jane` / `demo`, open the **Reward** tab, pick **SSO MODE** (`JWT` or `SAML 2.0`), tap
+**REDEEM** → the crimson Aspire page opens on that reward, already signed in. Confirm, then
+**CLOSE AND RETURN TO THE APP** → the reward shows **✓ REDEEMED**.
+
+The blue→crimson switch *is* the handoff. The journey is **identical for both protocols** — that is
+the point; the reward page shows a `VIA JWT` / `VIA SAML` badge so you can tell which ran.
 
 ## Demo users
 

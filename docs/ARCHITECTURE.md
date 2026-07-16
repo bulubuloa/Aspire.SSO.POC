@@ -3,9 +3,10 @@
 A demo of **silent SSO on Redeem**: a customer already logged into the client's app taps REDEEM and
 lands inside an Aspire reward page, already authenticated — **without ever seeing an Aspire login**.
 
-Two flows only: **login** (client-owned) and **redeem** (the SSO handoff).
+Two flows: **login** (client-owned) and **redeem** (the SSO handoff).
+Redeem runs over **either JWT or SAML 2.0** — both from the client guides, switchable at runtime.
 
-Implements the JWT path from `Client_JWT_Based_SSO_Implementation_Guide_vFinal 1.docx`.
+**Live:** <https://demo.aspireservice.online>
 
 ---
 
@@ -19,21 +20,25 @@ Implements the JWT path from `Client_JWT_Based_SSO_Implementation_Guide_vFinal 1
           ─────────────────────    ────────────────────      ──────────────────
           • login screen           • users + auth            • NO users, NO passwords
           • rewards list           • reward catalogue        • NO signing key
-          • REDEEM        ──①──▶   • RSA PRIVATE key ──┐     • validates client tokens
-          • opens web-view         • mints + signs JWT │     • session + jti replay store
-                    │              • publishes JWKS ◀──┼──── • fetches public keys by kid
-                    │                                  └─②─▶ • reward page
-                    └──────────────────③──────────────────▶  • issues client credentials
-                       (one-time ticket — no token)
+          • REDEEM        ──①──▶   • RSA PRIVATE key ──┐     • validates what they signed
+          • opens web-view         • Jwt/  signs JWT   │     • session + replay store
+                    │              • Saml/ signs XML   │     • Jwt/  validate + JWKS cache
+                    │              • publishes JWKS ◀──┼──── • Saml/ validate + cert cache
+                    │              • publishes SAML ◀──┼──── • reward page
+                    │                metadata          └─②─▶ • issues client credentials
+                    └──────────────────③──────────────────▶
+                       (one-time ticket / signed assertion)
+                    ◀─────────────────④──────────────────
+                       (ReturnUrl deep link / postMessage)
 
         └───────────────────────────────────────────────┘   └──────────────────┘
 ```
 
 | Component | Stack | Owns |
 |---|---|---|
-| **Demo Client app** | Expo / React Native | UI only. No key, no token. |
-| **Client.Demo** `:5001` | ASP.NET Core 10 | Users, auth, rewards, **private key**, signing |
-| **Aspire.Sso** `:6001` | ASP.NET Core 10 | Validation, sessions, replay, reward page |
+| **Demo Client app** | Expo / React Native — iOS, Android, web | UI only. No key, no token. |
+| **Client.Demo** `:5001` | ASP.NET Core 10 | Users, auth, rewards, **private key**, signing (JWT + SAML IdP) |
+| **Aspire.Sso** `:6001` | ASP.NET Core 10 | Validation (JWT + SAML SP), sessions, replay, reward page |
 
 Brands differ on purpose: the app is **blue "Demo Client"**, Aspire's page is **crimson "Aspire
 Lifestyles"**. The switch on Redeem *is* the handoff, visible in one second.
@@ -53,12 +58,12 @@ curl :5001/benefit     → 404   # the client has no sessions
 |---|---|---|
 | Users & passwords | ✅ owns | ❌ none — never authenticates a customer |
 | Private signing key | ✅ owns, never leaves | ❌ never sees it |
-| Public keys | publishes at `/.well-known/jwks.json` | fetches by `kid` over HTTP |
+| Public keys / certs | publishes (JWKS + SAML metadata) | fetches over HTTP, caches |
 | Sessions / replay | ❌ none | ✅ owns |
 | Client credentials | holds the secret it was issued | issues + verifies |
 
 **Aspire never learns the customer's password.** It receives an *assertion about* them, signed by
-someone it has agreed to trust. That is the whole model.
+someone it has agreed to trust. Same model for both protocols.
 
 ---
 
@@ -70,53 +75,66 @@ Aspire is not involved. No token is minted; nothing touches `:6001`.
 app → POST :5001/api/login  {"username":"jane","password":"demo"}
     ← 200 {"username","sub","email","displayName","country","program","active"}
     ← 401 {"error":"Invalid credentials"}
-app → stores the profile in the OS keystore ('client_session'), gate opens
+app → stores the profile (OS keystore; localStorage on web), gate opens
 ```
 
 ⚠️ The response is a **profile, not a session token** — the server issues nothing it can later
-verify. See *Open questions* below.
+verify. See *Open questions*.
 
 ---
 
-## 4. Flow ② — Redeem (the silent handoff)
+## 4. Flow ② — Redeem
+
+**The customer journey is identical for both protocols** — tap, land in the reward page, confirm,
+return. That is the point: the client can move from SAML to JWT later with **no change to the app or
+the journey**. Only the transport underneath differs.
 
 ```
-① app   → POST :5001/api/redeem {"username":"jane","rewardId":"lounge"}
-
-② :5001 → mints RS256 JWT with its PRIVATE key, then server-to-server:
-             POST :6001/sso/jwt
-             Authorization: Basic base64(client_id:client_secret)
-             {"token":"<jwt>"}
-   :6001 → fetch client JWKS by kid → verify sig, iss, aud, exp, iat → consume jti
-         → create session → issue one-time 60s ticket
-   :5001 ← {"ok":true,"launchUrl":"…?ticket=…"}
-   app   ← {"launchUrl":"…","reward":"Airport lounge pass"}
-
-③ app   → opens launchUrl in a web-view
-   :6001 → 302, swaps ticket for a session cookie → reward page, already signed in
-         → CONFIRM REDEMPTION → REDEEMED receipt
-④ close → Aspire hands the customer back to the client's registered ReturnUrl
-   app   → closes the web-view, marks the reward ✓ REDEEMED
+app → POST :5001/api/redeem {"rewardId":"lounge","mode":"jwt"|"saml"}
+    ← {"launchUrl":"…","via":"JWT"|"SAML"}
+app → opens launchUrl in a web-view → reward page, already signed in
+    ← ④ CLOSE → ReturnUrl deep link (native) / postMessage (web) → app marks ✓ REDEEMED
 ```
 
-| Hop | From → To | Carries | Seen by the user? |
-|---|---|---|---|
-| ① | app → Client.Demo | `rewardId` | no |
-| ② | **Client.Demo → Aspire.Sso** | signed JWT + client credentials | **no — back-channel** |
-| ③ | app's web-view → Aspire.Sso | one-time ticket | yes — the reward page opens |
-| ④ | Aspire.Sso → the app | `ReturnUrl` deep link (native) / `postMessage` (web) | yes — the app updates |
+### JWT — fully silent, back-channel
 
-**The app never holds a token.** The JWT exists only between the two servers in ②. The ticket in ③
-is worthless alone — that's what keeps the token out of browser history, proxies and the URL bar.
+```
+:5001  mints RS256 JWT (private key, target=reward)
+       POST :6001/sso/jwt
+         Authorization: Basic base64(client_id:client_secret)
+         {"token":"<jwt>"}
+:6001  fetch client JWKS by kid → verify sig, iss, aud, exp, iat → consume jti
+       → session → one-time 60s ticket
+:5001  ← {"launchUrl":"…/benefit?ticket=…"}
+```
 
-### Redeem errors
+**The token never touches the browser.** Two independent checks: the secret proves *who is calling*,
+the signature proves *who the user is*.
+
+### SAML 2.0 — the browser carries it
+
+```
+:5001  ← {"launchUrl":":5001/saml/sso?code=<one-time>"}
+app    opens it → :5001 signs an assertion → auto-POST form
+browser  POST :6001/sso/saml/acs {SAMLResponse}
+:6001  fetch the client's cert from their SAML metadata → verify signature, XSW guard,
+       issuer, audience, recipient, expiry → consume assertion id
+       → session → 302 /benefit  (real Set-Cookie)
+```
+
+**SAML cannot be back-channel** — the HTTP-POST binding requires the browser to carry the assertion.
+A one-time 60s code keeps the user's identity out of the URL. No client credentials here: a browser
+is a public client and cannot hold a secret, so the signature is the only proof — which is exactly
+what SAML is built around.
+
+### Redeem errors (both modes)
 
 | Case | Status | Body |
 |---|---|---|
 | Unknown user | `401` | `{"error":"Not authenticated"}` |
 | Inactive user | `403` | `{"error":"User is inactive / not authorised"}` |
 | Unknown reward | `400` | `{"error":"Unknown reward"}` |
-| Token rejected by Aspire | `401` | Aspire's reason — e.g. `{"error":"Token expired"}` |
+| Token/assertion rejected | `401` | Aspire's reason — e.g. `{"error":"Token expired"}` |
 | Aspire unreachable | `502` | `{"error":"Aspire SSO is unreachable"}` |
 
 ---
@@ -125,45 +143,44 @@ is worthless alone — that's what keeps the token out of browser history, proxi
 
 ### Client.Demo `:5001`
 
-| Method | Path | Purpose |
+| Method | Path | |
 |---|---|---|
 | POST | `/api/login` | client-owned auth |
 | GET | `/api/rewards` | reward catalogue |
-| POST | `/api/redeem` | **the silent handoff** — signs + calls Aspire |
-| GET | `/.well-known/jwks.json` | **public** keys, for Aspire |
+| POST | `/api/redeem` | **the handoff** — `mode: jwt \| saml` |
+| GET | `/.well-known/jwks.json` | **public** keys, for Aspire (JWT) |
+| GET | `/saml/sso` | SAML IdP — signs + auto-POSTs the assertion |
+| GET | `/saml/metadata` | IdP Entity ID + **public** signing certificate |
 | POST | `/api/jwt` | demo-only — raw token so `test.sh` can call Aspire directly |
-
-The app registers `democlient://` as its URL scheme (`app.json`), which is what lets Aspire hand the
-customer back in step ④.
 
 ### Aspire.Sso `:6001`
 
-| Method | Path | Purpose |
+| Method | Path | |
 |---|---|---|
-| POST | `/sso/jwt` | **the SSO endpoint** — validate + create session |
+| POST | `/sso/jwt` | **JWT SSO** — validate + session (client credentials required) |
+| POST | `/sso/saml/acs` | **SAML ACS** — validate assertion + session |
+| GET | `/sso/saml/metadata` | SP Entity ID + ACS URL |
 | GET | `/benefit?ticket=` | redeem ticket → cookie → reward page |
 | GET | `/api/session` | inspect the current session |
 | POST | `/logout` | end it |
 
 ---
 
-## 6. The token
+## 6. The token / assertion
 
-Minted by `Client.Demo/JwtIssuer.cs`, validated by `Aspire.Sso/JwtValidator.cs`.
+Both carry the same identity; only the encoding differs.
 
 ```json
-// header
+// JWT — Client.Demo/Jwt/JwtIssuer.cs → Aspire.Sso/Jwt/JwtValidator.cs
 { "alg": "RS256", "kid": "client-demo-key-2026-015", "typ": "JWT" }
-
-// payload
 {
   "sub": "C123456789", "email": "jane.tan@client-demo.com",
   "given_name": "Jane", "family_name": "Tan",
   "country": "TH", "program": "FWD_PREMIUM",
-  "jti": "<uuid>", "iat": …, "nbf": …, "exp": …,     // exp = iat + 120s
+  "jti": "<uuid>", "iat": …, "nbf": …, "exp": …,   // exp = iat + 120s
   "iss": "https://client.demo",
   "aud": "aspire-lifestyle-sso-demo-env",
-  "target": "lounge"                                  // ⚠️ ours, not in the contract yet
+  "target": "lounge"                                // ⚠️ ours, not in the contract yet
 }
 ```
 
@@ -184,45 +201,32 @@ standard and validated *by name*. Renaming `exp` would silently disable expiry c
 `family_name`, `jti`, `exp`, `iat`. **Optional**: `country`, `program` (rendered), `target`, `nbf`,
 `typ`. `member_id` is not sent — Aspire ignored it.
 
-### What Aspire checks
-
-1. Reads `kid` from the header.
-2. Fetches the client's **public** keys from their JWKS URL (cached 10 min by `kid`).
-3. Verifies the signature, **pinned to RS256** — no `alg:none`, no HS256 downgrade.
-4. `iss`, `aud`, `exp`/`nbf`/`iat` (±30s skew), mandatory claims.
-5. Consumes the `jti` — a second use is rejected.
-6. Creates a session carrying `target`, issues a one-time ticket.
+SAML carries the same values as assertion attributes (`sub`, `email`, `firstName`, `lastName`,
+`country`, `program`, `target`), with `NameID` = email.
 
 ---
 
-## 7. Keys and credentials
+## 7. Keys, certs and credentials
 
 | | Where | Note |
 |---|---|---|
 | RSA private key | **Client.Demo only**, in memory | regenerated each restart ⚠️ |
 | RSA public key | published as JWKS | fetched by Aspire, cached 10 min by `kid` |
-| `client_secret` | both sides' config | authenticates the **caller**, does **not** sign |
+| X509 cert (SAML) | **Client.Demo only**, self-signed | same RSA key; fetched from their metadata, cached 10 min |
+| `client_secret` | both sides | authenticates the **caller** (JWT only), does **not** sign |
 
-**Two independent checks** on hop ②:
-
-| | Proves | Mechanism |
-|---|---|---|
-| `Authorization: Basic` | **who is calling** | `base64(client_id:client_secret)`, issued by Aspire |
-| the JWT signature | **who the user is** | client's own RS256 private key |
+Both caches **invalidate and retry once on a signature failure** — a client can rotate key material
+behind an unchanged `kid`/metadata URL, which a TTL alone would not catch.
 
 Why not a shared HS256 secret? Both parties could then mint a token for **any** customer — no
 non-repudiation, and a leak from either side is total impersonation. The onboarding form says
 *"shared-secret HS256 should be avoided unless explicitly approved."*
 
-`JwksCache` resolves by `kid`, re-fetches on an unknown `kid` (≤30s anti-hammer delay), and
-**invalidates + retries once on a signature failure** — because a client can rotate key material
-behind the *same* `kid`, which a TTL alone would not catch.
-
 ---
 
 ## 8. Config contract
 
-Four fields must match on both sides — **case-sensitive, not trimmed**:
+Must match on both sides — **case-sensitive, not trimmed**:
 
 | Client.Demo | Aspire.Sso | Mismatch gives |
 |---|---|---|
@@ -230,41 +234,72 @@ Four fields must match on both sides — **case-sensitive, not trimmed**:
 | `Client:Aspire:Audience` | `Aspire:Audience` | `Audience mismatch` |
 | `Client:Aspire:ClientId` | `…RegisteredClients[0].ClientId` | `Invalid or missing client credentials` |
 | `Client:Aspire:ClientSecret` | `…RegisteredClients[0].ClientSecret` | same |
+| `Client:SamlEntityId` | `…RegisteredClients[0].SamlEntityId` | SAML `Issuer mismatch` **(JWT unaffected)** |
 
-Aspire also registers the client's **`ReturnUrl`** (`democlient://redeemed`) — where to send the
-customer when they close the reward page. It has no counterpart on the client side; it is Aspire's
-record of the client's deep link, agreed at onboarding.
+Aspire-only: `RegisteredClients[0].ReturnUrl` (`democlient://redeemed`) — where to send the customer
+on close. Client-only: `SigningKeyId` — Aspire reads `kid` from the token and looks it up, which is
+what allows rotation with no Aspire change.
 
-`SigningKeyId` is **client-only** — Aspire reads `kid` from the token header and looks it up in the
-JWKS. Change it freely; that's what makes rotation possible with no Aspire change.
+> ⚠️ **`SamlEntityId` is the one field JWT never reads.** It can be wrong while every JWT redeem
+> passes — this has already broken once. Test both paths after a config change.
 
 Both services **fail fast at startup** on missing/invalid config, naming the field and why.
 
 ---
 
-## 9. Design decisions
+## 9. Deployment
 
-| Decision | Why |
+VPS + **Caddy** (automatic Let's Encrypt). Images are built by CI and pulled by the box — a 1GB VPS
+cannot compile .NET without OOMing.
+
+```
+push main → CI (34 tests) → images → ghcr.io → VPS pulls → deploy.sh verify
+```
+
+| Host | |
 |---|---|
-| Signing on the client's **server**, not the app | A key in an APK/IPA will be extracted → anyone could mint a token for any `sub` |
-| Two services, not one | The trust boundary is real, not a convention. Sharing a process hid an authorization bug |
-| Back-channel POST, not a redirect | Guide §5: token-in-URL is "not preferred" — URLs get logged |
-| One-time launch ticket | Lets the web-view open Aspire without the JWT in the URL |
-| 120s expiry + `jti` | Guide §4: short-lived, one-time-use |
-| Credentials separate from signing | Two independent facts: *who calls* vs *who the user is* |
+| `client.aspireservice.online` | Client.Demo |
+| `aspire.aspireservice.online` | Aspire.Sso |
+| `demo.aspireservice.online` | Expo web export (static, served by Caddy) |
+
+`DOTNET_gcServer=0` on both — Server GC pre-allocates per-core heaps, pointless on 1 core. Each
+service idles at ~16MB.
+
+Caddy sets `X-Forwarded-Proto`, and both services honour it. Without that `req.IsHttps` is false, the
+session cookie is issued `Lax`-without-`Secure`, and `launchUrl` comes back `http` — silently
+breaking the cross-site handoff. `ForwardedHeadersOptions.KnownNetworks/KnownProxies` must be
+**cleared** (they default to loopback only, and Caddy reaches the apps from a docker address).
+
+---
+
+## 10. Web vs native
+
+One codebase, three targets. The native APIs have no web implementation, so:
+
+| Concern | Native | Web |
+|---|---|---|
+| Session storage | Keychain / Keystore | localStorage (`src/storage.js`) |
+| Alerts | `Alert.alert` | `window.alert/confirm` (`src/notify.js`) |
+| Reward page opens in | in-app browser sheet | in-page iframe overlay (`src/RewardBrowser.js`) |
+| Return to the app | `democlient://redeemed` deep link | `postMessage` |
+
+**Web is demo-only.** localStorage is not secure storage, and the iframe works locally only because
+the ports share `localhost` (cookies ignore ports). Across real domains the cookie needs
+`SameSite=None; Secure` — which is why Aspire switches on `req.IsHttps` — and a production Aspire
+would refuse to be framed at all.
 
 ---
 
 ## Open questions for the real build
 
-Demo shortcuts (in-memory state, HTTP, config secrets, hardcoded points) are not listed — they are
-obvious. These three are **design decisions that outlive the demo**:
+Demo shortcuts (in-memory state, config secrets, hardcoded points) are not listed — they are obvious.
+These three are **design decisions that outlive the demo**:
 
 **1. Where does identity come from on Redeem?**
-Today `/api/redeem` takes `username` from the request body and trusts it. That is fine for a demo,
-but it is the step where a human's authentication becomes a cryptographic assertion — the client's
-real endpoint must read identity from the caller's **authenticated session**, never from the body.
-Everything downstream (RS256, JWKS, `jti`, client credentials) is only as strong as this one check.
+Today `/api/redeem` takes `username` from the request body and trusts it. That is the step where a
+human's authentication becomes a cryptographic assertion — the client's real endpoint must read
+identity from the caller's **authenticated session**, never from the body. Everything downstream
+(RS256, JWKS, `jti`, client credentials) is only as strong as this one check.
 
 **2. Who owns eligibility?**
 Aspire has no user directory, so it cannot check whether a customer may redeem — the **client**
@@ -274,8 +309,7 @@ lookup by `sub`. **Undecided — raise at onboarding.**
 
 **3. How is the reward deep-linked?**
 "Auto login *and can redeem*" only works if the customer lands on **that** reward. We use a `target`
-claim, which is **not in the client-facing claim contract**. Agree it with the client — as a claim,
-or as a parameter alongside the token.
+claim/attribute, which is **not in the client-facing contract**. Agree it with the client.
 
 ---
 
@@ -285,25 +319,32 @@ or as a parameter alongside the token.
 backend/Client.Demo/          :5001 — the client's system
   Program.cs                  endpoints + startup validation
   ClientOptions.cs            config shape
-  ClientKeys.cs               RSA key (PRIVATE — never leaves)
-  JwtIssuer.cs                mints the signed token
+  ClientKeys.cs               RSA key + X509 cert (PRIVATE — never leave)
+  Jwt/JwtIssuer.cs            mints the signed token
+  Saml/SamlIdp.cs             signs assertions (XML-DSig, exclusive C14N)
   appsettings.json            issuer, kid, Aspire contract, users, rewards
 
 backend/Aspire.Sso/           :6001 — our SSO
-  Program.cs                  endpoints + client authentication
+  Program.cs                  endpoints + client authentication + cookie policy
   AspireOptions.cs            config shape
-  JwtValidator.cs             validates the token
-  JwksCache.cs                fetches client public keys by kid
-  SessionStore.cs             sessions, replay, one-time tickets
-  Pages.cs                    Aspire-branded reward / error pages
-  appsettings.json            audience, registered clients, rewards
+  Jwt/JwtValidator.cs         validates the token
+  Jwt/JwksCache.cs            fetches client public keys by kid
+  Saml/SamlValidator.cs       validates assertions (XSW guard) + cert cache
+  SessionStore.cs             sessions, jti + assertion replay, one-time tickets
+  Pages.cs                    Aspire-branded reward / benefit / error pages
 
 mobile/                       the client's app
-  App.js                      login gate, Dashboard, Reward
+  App.js                      login gate, Dashboard, Reward, demo switches
   src/api.js                  talks ONLY to :5001
-  src/config.js               backend URL (auto-selects per platform)
+  src/config.js               backend URL (per platform / EXPO_PUBLIC_BACKEND_URL)
+  src/storage.js              keystore ↔ localStorage
+  src/notify.js               Alert ↔ window.alert
+  src/RewardBrowser.js        web-only in-page overlay
   src/theme.js                "Demo Client" tokens (blue)
 
+deploy/                       Caddyfile + docker-compose.yml (run on the VPS)
+deploy-vps.sh                 one-time box bootstrap
+deploy.sh                     check / urls / verify
 test.sh                       34 end-to-end checks
 ```
 

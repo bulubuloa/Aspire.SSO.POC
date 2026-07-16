@@ -1,6 +1,9 @@
 # Running & Testing
 
-Two flows: **login** and **redeem**. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how they work.
+Two flows: **login** and **redeem**. Redeem runs over **JWT or SAML** — switchable in the app.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how they work.
+
+**Live:** <https://demo.aspireservice.online>
 
 ## Prerequisites
 
@@ -54,7 +57,10 @@ Invalid configuration:
 ./test.sh
 ```
 
-34 checks — trust boundary, login, the redeem handoff, negative cases, token contract:
+34 checks — trust boundary, login, the redeem handoff, negative cases, token contract.
+
+> ⚠️ **These cover the JWT path only.** SAML is verified by hand (above). The stale
+> `/aspire/benefit` redirect that broke SAML entirely went unnoticed for exactly this reason.
 
 ```
 ── trust boundary ─────────────────────────────────────
@@ -130,9 +136,10 @@ Find your LAN IP: `ipconfig getifaddr en0`. The backends already bind `0.0.0.0`.
 1. **Sign in** — `jane` / `demo` (the client's own login; Aspire not involved)
 2. **Dashboard** — user card, weather, news
 3. **Reward** tab — 3 featured cards + 9 offers
-4. **REDEEM** on any offer → the **crimson Aspire page** opens on *that* reward, already signed in
-5. **CONFIRM REDEMPTION** → `REDEEMED — Confirmation sent to jane.tan@client-demo.com`
-6. **CLOSE AND RETURN TO THE APP** → you land back in the app and that reward now shows **✓ REDEEMED**
+4. **SSO MODE** — flip between `JWT` and `SAML 2.0` (top of the Reward tab)
+5. **REDEEM** on any offer → the **crimson Aspire page** opens on *that* reward, already signed in
+6. **CONFIRM REDEMPTION** → `REDEEMED — Confirmation sent to jane.tan@client-demo.com`
+7. **CLOSE AND RETURN TO THE APP** → back in the app, that reward now shows **✓ REDEEMED**
 
 The blue→crimson switch **is** the handoff. No Aspire login appears at any point.
 
@@ -152,16 +159,47 @@ Try `mai` / `demo` — she logs in fine but Redeem returns *User is inactive / n
 
 ## 4. Manual checks
 
-### The silent handoff
+### The silent handoff — JWT
 
 ```bash
 curl -X POST http://localhost:5001/api/redeem \
   -H 'Content-Type: application/json' \
-  -d '{"username":"jane","rewardId":"lounge"}'
-# → {"launchUrl":"http://localhost:6001/benefit?ticket=…","reward":"Airport lounge pass"}
+  -d '{"username":"jane","rewardId":"lounge","mode":"jwt"}'
+# → {"launchUrl":"http://localhost:6001/benefit?ticket=…","via":"JWT"}
 ```
 
 Open that `launchUrl` in a browser → the Aspire reward page, already signed in.
+
+### The handoff — SAML
+
+```bash
+curl -X POST http://localhost:5001/api/redeem \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"jane","rewardId":"lounge","mode":"saml"}'
+# → {"launchUrl":"http://localhost:5001/saml/sso?code=…","via":"SAML"}
+```
+
+Note the launchUrl points at **the client's own IdP**, not Aspire. Open it in a browser: it signs an
+assertion and auto-POSTs it to Aspire's ACS, which validates and redirects to the reward page.
+
+**SAML needs a real browser** — curl will not follow the auto-POST form. To drive it headlessly you
+have to extract `SAMLResponse` from the form and POST it yourself:
+
+```bash
+LU=$(curl -s -X POST http://localhost:5001/api/redeem -H 'Content-Type: application/json' \
+  -d '{"username":"jane","rewardId":"lounge","mode":"saml"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['launchUrl'])")
+SR=$(curl -s "$LU" | grep -oE 'value="[^"]+"' | sed 's/value="//;s/"//')
+curl -s -c /tmp/j -o /dev/null -X POST http://localhost:6001/sso/saml/acs --data-urlencode "SAMLResponse=$SR"
+curl -s -b /tmp/j http://localhost:6001/api/session      # → "via":"SAML"
+```
+
+### SAML metadata — what you would exchange with a real client
+
+| URL | |
+|---|---|
+| <http://localhost:5001/saml/metadata> | client IdP Entity ID + **public** signing certificate |
+| <http://localhost:6001/sso/saml/metadata> | Aspire SP Entity ID + ACS URL |
 
 ### Watch the real key exchange
 
@@ -196,14 +234,16 @@ print(json.dumps(d(h),indent=2)); print(json.dumps(d(p),indent=2))"
 
 | URL | What |
 |---|---|
-| <http://localhost:5001/.well-known/jwks.json> | the client's **public** key |
-| <http://localhost:6001/api/session> | current session (401 without one) |
+| <http://localhost:5001/.well-known/jwks.json> | the client's **public** key (JWT) |
+| <http://localhost:5001/saml/metadata> | the client's IdP metadata + cert (SAML) |
+| <http://localhost:6001/sso/saml/metadata> | Aspire's SP metadata (SAML) |
+| <http://localhost:6001/api/session> | current session (401 without one) — shows `via` |
 
 ---
 
 ## 5. Config changes
 
-Four fields must match on **both** sides — case-sensitive, not trimmed:
+Five fields must match on **both** sides — case-sensitive, not trimmed:
 
 ```bash
 python3 - <<'PY'
@@ -214,12 +254,14 @@ r = a["RegisteredClients"][0]
 for k, cv, av in [("Issuer",       c["Issuer"],                 r["Issuer"]),
                   ("Audience",     c["Aspire"]["Audience"],     a["Audience"]),
                   ("ClientId",     c["Aspire"]["ClientId"],     r["ClientId"]),
-                  ("ClientSecret", c["Aspire"]["ClientSecret"], r["ClientSecret"])]:
+                  ("ClientSecret", c["Aspire"]["ClientSecret"], r["ClientSecret"]),
+                  ("SamlEntityId", c["SamlEntityId"],           r["SamlEntityId"])]:
     print(f"{'OK  ' if cv==av else 'MISMATCH'} {k:<14} {cv}")
 PY
 ```
 
-Then run `./test.sh`.
+Then run `./test.sh` **and** a manual SAML redeem — `SamlEntityId` is the one field JWT never
+reads, so it can be wrong while every JWT test passes. That has already broken once.
 
 `SigningKeyId` is client-only: Aspire reads `kid` from the token header and looks it up in the JWKS.
 Change it freely — no Aspire change needed. Allow ~30s for the JWKS cache to re-fetch.
@@ -245,12 +287,38 @@ export Aspire__RegisteredClients__0__ClientSecret=sk_prod_xxxxx
 | `Aspire SSO is unreachable` (502) | `:6001` is down, or `SsoEndpoint` is wrong |
 | `Token expired` on every redeem | Clock skew > 30s between machines |
 | App shows *Guest* after login | Session lost; the profile lives in the OS keystore |
+| SAML `Issuer mismatch`, JWT fine | `SamlEntityId` differs between the two configs |
+| SAML redirects to a 404 | Aspire serves `/benefit`, not `/aspire/*` — a stale monolith path |
 | App can't reach the backend | `localhost` on a device = the device. See §3 |
 | Startup: `Invalid configuration: …` | Working as intended — it names the missing field |
 
 ---
 
-## 7. Reset
+## 7. Deployment
+
+CI deploys on every push to `main` — see [`ARCHITECTURE.md` §9](ARCHITECTURE.md#9-deployment).
+
+```bash
+./deploy.sh check                      # build everything locally first
+./deploy.sh urls aspireservice.online  # env vars for a domain
+CLIENT_SECRET=… ./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
+```
+
+`verify` checks the two things that only fail in production — `launchUrl` comes back `https`
+(forwarded headers) and the cookie is `SameSite=None; Secure` (cross-site iframe) — then runs the
+full suite against live. **The deployed secret is not in `appsettings.json`**, so pass
+`CLIENT_SECRET` or those checks use the fake demo value.
+
+On the box:
+
+```bash
+./deploy-vps.sh status    # containers, memory, endpoint codes
+./deploy-vps.sh logs      # tail
+```
+
+---
+
+## 8. Reset
 
 ```bash
 pkill -f "Client.Demo|Aspire.Sso"     # stop both

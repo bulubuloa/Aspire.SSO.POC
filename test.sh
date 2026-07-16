@@ -18,6 +18,18 @@ check() { # check <name> <expected-substring> <actual>
 post() { curl -s -X POST "$1" -H 'Content-Type: application/json' -d "$2"; }
 redeem() { post "$C/api/redeem" "$1"; }
 
+# SAML needs a browser: the IdP returns a self-posting form. curl will not follow it, so pull the
+# assertion out and POST it ourselves — the same two hops the browser would make.
+saml_launch() { # saml_launch <scenario> -> the signed SAMLResponse
+  local sc="${1:-}"
+  local lu
+  lu=$(redeem "{\"username\":\"jane\",\"rewardId\":\"lounge\",\"mode\":\"saml\",\"scenario\":\"$sc\"}" \
+       | python3 -c "import sys,json;print(json.load(sys.stdin).get('launchUrl',''))" 2>/dev/null)
+  [ -z "$lu" ] && return 1
+  curl -s "$lu" | grep -oE 'value="[^"]+"' | sed 's/value="//;s/"//'
+}
+saml_acs() { curl -s -X POST "$A/sso/saml/acs" --data-urlencode "SAMLResponse=$1"; }
+
 echo "── services up? ───────────────────────────────────────"
 check "Client.Demo :5001 responding" "coffee"     "$(curl -s $C/api/rewards)"
 check "Aspire.Sso  :6001 responding" "401" "$(curl -s -o /dev/null -w '%{http_code}' $A/api/session)"
@@ -88,6 +100,35 @@ for c in sub email given_name family_name jti iat exp iss aud; do
   check "claim '$c' present" "$c" "$CLAIMS"
 done
 check "member_id NOT sent (unused)" "" "$([[ "$CLAIMS" != *member_id* ]] && echo "")"
+
+echo
+echo "── SAML ───────────────────────────────────────────────"
+check "IdP publishes metadata + cert" "X509Certificate" "$(curl -s $C/saml/metadata)"
+check "SP publishes metadata + ACS"   "AssertionConsumerService" "$(curl -s $A/sso/saml/metadata)"
+
+SR=$(saml_launch "")
+# The IdP hands back a signed <saml:Assertion> wrapped in a <samlp:Response>. Decode the whole
+# thing — the Assertion sits well past the Response header and Status.
+check "redeem mode=saml → signed assertion" "<saml:Assertion" "$(echo "$SR" | base64 -d 2>/dev/null)"
+check "  …assertion is signed"              "SignatureValue"  "$(echo "$SR" | base64 -d 2>/dev/null)"
+
+if [ -n "$SR" ]; then
+  sjar=$(mktemp)
+  curl -s -c "$sjar" -o /dev/null -X POST "$A/sso/saml/acs" --data-urlencode "SAMLResponse=$SR"
+  check "signed assertion → session"  '"authenticated":true'      "$(curl -s -b "$sjar" $A/api/session)"
+  check "  …session says via SAML"    '"via":"SAML"'              "$(curl -s -b "$sjar" $A/api/session)"
+  check "  …session is Jane"          '"displayName":"Jane Tan"'  "$(curl -s -b "$sjar" $A/api/session)"
+  check "  …deep-linked reward page"  "Airport lounge pass"       "$(curl -s -b "$sjar" $A/benefit)"
+  check "  …page shows VIA SAML"      "VIA SAML"                  "$(curl -s -b "$sjar" $A/benefit)"
+  rm -f "$sjar"
+  # the same assertion must not work twice
+  check "assertion replay rejected"   "Replay detected"           "$(saml_acs "$SR")"
+fi
+
+check "saml tampered → rejected"   "Invalid signature"  "$(saml_acs "$(saml_launch tampered)")"
+check "saml wrong audience → rejected" "Audience mismatch"  "$(saml_acs "$(saml_launch wrong-aud)")"
+check "saml expired → rejected"    "Assertion expired"  "$(saml_acs "$(saml_launch expired)")"
+check "saml inactive user → 403"   "User is inactive"   "$(redeem '{"username":"mai","rewardId":"lounge","mode":"saml"}')"
 
 echo
 echo "───────────────────────────────────────────────────────"
