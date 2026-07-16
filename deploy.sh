@@ -114,6 +114,11 @@ cmd_verify() {
     local code; code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$u")
     [[ "$code" =~ ^(200|401)$ ]] && ok "$u → $code" || bad "$u → $code"
   done
+  # The web app is a separate service and broke once on its own (bind-mount inode swap) —
+  # check it explicitly rather than assuming the APIs being up means the site is.
+  local demo="${client/client./demo.}"
+  local dcode; dcode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$demo")
+  [ "$dcode" = "200" ] && ok "$demo → 200" || bad "$demo → $dcode (web app not served)"
   [ $FAILED -ne 0 ] && return 1
 
   echo

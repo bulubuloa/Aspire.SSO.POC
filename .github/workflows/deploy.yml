@@ -91,14 +91,15 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
-            # Swap in the new web build atomically-ish, keep .env (it holds the secret)
-            rm -rf /opt/sso/demo.new && cp -r /opt/sso-staging/web /opt/sso/demo.new
+            # Replace the web build IN PLACE. Do NOT mv/swap the directory: caddy bind-mounts
+            # /opt/sso/demo and a mount follows the INODE, not the path — swapping it leaves
+            # caddy serving a directory that no longer exists (silent 404s on every deploy).
+            mkdir -p /opt/sso/demo
+            find /opt/sso/demo -mindepth 1 -delete
+            cp -r /opt/sso-staging/web/. /opt/sso/demo/
             cp /opt/sso-staging/deploy/docker-compose.yml /opt/sso/
             cp /opt/sso-staging/deploy/Caddyfile /opt/sso/
-            rm -rf /opt/sso/demo.old
-            [ -d /opt/sso/demo ] && mv /opt/sso/demo /opt/sso/demo.old
-            mv /opt/sso/demo.new /opt/sso/demo
-            rm -rf /opt/sso-staging
+            rm -rf /opt/sso-staging /opt/sso/demo.old /opt/sso/demo.new
 
             cd /opt/sso
             docker compose pull client aspire
