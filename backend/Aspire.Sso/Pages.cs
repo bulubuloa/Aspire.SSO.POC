@@ -36,9 +36,21 @@ public static class Pages
           <div style="color:#6b6448;font-size:14px">{{r.Detail}}</div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
           <span class="pill"><i class="fa-solid fa-user-check"></i> {{s.DisplayName}}</span>
           <span class="pill" style="background:#cef2e7;color:#08845f"><i class="fa-solid fa-bolt"></i> AUTO SIGNED IN</span>
+          <!-- Which protocol actually got them here. Without this, JWT and SAML land on
+               identical pages and the demo cannot show the difference. -->
+          <span class="pill" style="background:var(--ink);color:#fff">
+            <i class="fa-solid fa-{{(s.Via == "SAML" ? "right-left" : "server")}}"></i> VIA {{s.Via}}
+          </span>
+        </div>
+
+        <div class="kv" style="margin-bottom:16px;background:#f8fafc">
+          <b>HOW YOU GOT HERE</b>
+          <span style="font-weight:400;font-size:12px;color:var(--muted)">{{(s.Via == "SAML"
+            ? "app → client IdP → signed assertion → your browser POSTed it to Aspire → session. The assertion travelled through the browser (SAML's HTTP-POST binding requires it)."
+            : "app → client backend → signed JWT POSTed to Aspire server-to-server → one-time ticket → session. The token never touched your browser.")}}</span>
         </div>
 
         <div class="grid">
@@ -115,7 +127,7 @@ public static class Pages
             <div><b>Travel Privileges</b><div class="muted">Lounge access · trip cover</div></div></div>
         </div>
         <p style="margin-top:18px">
-          <button class="btn btn-dark" onclick="fetch('/aspire/logout',{method:'POST'}).then(()=>location.href='/')">
+          <button class="btn btn-dark" onclick="fetch('/logout',{method:'POST'}).then(()=>location.href='/')">
             <i class="fa-solid fa-right-from-bracket"></i> LOG OUT
           </button>
         </p>
@@ -131,20 +143,6 @@ public static class Pages
     </body></html>
     """;
 
-    // Browser front-channel POST result: set the session cookie client-side, then land on the benefit page.
-    public static string SigningIn(SessionStore.AspireSession s) => $$"""
-    <!doctype html><html><head>{{Head}}<title>Signing you in…</title></head><body>
-    {{Header}}
-    <div class="wrap"><div class="card">
-      <i class="fa-solid fa-circle-notch fa-spin" style="color:var(--red)"></i>
-      Signing you in via {{s.Via}}…
-    </div></div>
-    <script>
-      document.cookie = "aspire_session={{s.Id}}; path=/; SameSite=Lax";
-      location.replace("/aspire/benefit");
-    </script></body></html>
-    """;
-
     public static string Error(string message) => $$"""
     <!doctype html><html lang="en"><head>{{Head}}<title>SSO rejected</title></head><body>
     {{Header}}
@@ -152,7 +150,7 @@ public static class Pages
       <h2><i class="fa-solid fa-circle-exclamation" style="color:var(--danger)"></i> SSO handoff rejected</h2>
       <p class="muted">Aspire could not create a session from the token it received.</p>
       <div class="kv"><b>REASON</b><span>{{message}}</span></div>
-      <p style="margin-top:18px"><a class="btn btn-ghost" href="/"><i class="fa-solid fa-arrow-left"></i> BACK TO THE DEMO LAUNCHER</a></p>
+      <p class="muted" style="margin-top:18px;font-size:12px">Close this window and try again from the app.</p>
     </div></div></body></html>
     """;
 }

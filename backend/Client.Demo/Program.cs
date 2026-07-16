@@ -27,6 +27,7 @@ var rewards = options.Rewards.Select(r => new Reward(r.Id, r.Title, r.Points, r.
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<ClientKeys>();
 builder.Services.AddSingleton<JwtIssuer>();
+builder.Services.AddSingleton<SamlIdp>();
 builder.Services.AddHttpClient();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
@@ -49,6 +50,11 @@ fwd.KnownProxies.Clear();
 app.UseForwardedHeaders(fwd);
 
 app.UseCors();
+
+// SAML needs the browser to visit our IdP, but the user's identity must not ride in the URL.
+// A one-time 60s code carries it — same reasoning as Aspire's launch ticket.
+var samlCodes = new System.Collections.Concurrent.ConcurrentDictionary<string,
+    (string User, string? Reward, string? Scenario, DateTimeOffset Exp)>();
 
 ClientUser? FindUser(string? username) =>
     users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
@@ -76,7 +82,7 @@ app.MapGet("/.well-known/jwks.json", (ClientKeys keys) => Results.Json(keys.Buil
 // ---- SILENT REDEEM HANDOFF ----
 // The app calls this on "Redeem". We sign the token and hand it to Aspire back-channel,
 // then return only a one-time launch URL. The app never sees the token.
-app.MapPost("/api/redeem", async (RedeemDto dto, JwtIssuer issuer, IHttpClientFactory httpFactory, ILogger<Program> log) =>
+app.MapPost("/api/redeem", async (RedeemDto dto, HttpRequest req, JwtIssuer issuer, IHttpClientFactory httpFactory, ILogger<Program> log) =>
 {
     // In production this is the caller's authenticated session, not a username in the body.
     var user = FindUser(dto.Username);
@@ -91,6 +97,16 @@ app.MapPost("/api/redeem", async (RedeemDto dto, JwtIssuer issuer, IHttpClientFa
     var reward = rewards.FirstOrDefault(r => string.Equals(r.Id, dto.RewardId, StringComparison.OrdinalIgnoreCase));
     if (reward is null) return Results.Json(new { error = "Unknown reward" }, statusCode: 400);
 
+    // ---- SAML: no back-channel is possible. The HTTP-POST binding needs the browser to carry
+    // the assertion, so hand back a URL to OUR IdP; it redirects on to Aspire's ACS. ----
+    if (string.Equals(dto.Mode, "saml", StringComparison.OrdinalIgnoreCase))
+    {
+        var code = Guid.NewGuid().ToString("N");
+        samlCodes[code] = (user.Username, reward.Id, dto.Scenario, DateTimeOffset.UtcNow.AddSeconds(60));
+        var self = $"{req.Scheme}://{req.Host}";
+        return Results.Json(new { launchUrl = $"{self}/saml/sso?code={code}", reward = reward.Title, via = "SAML" });
+    }
+
     // 1. Sign a short-lived JWT with OUR private key, deep-linked to this reward.
     var token = issuer.Issue(user, dto.Scenario, target: reward.Id);
 
@@ -98,16 +114,16 @@ app.MapPost("/api/redeem", async (RedeemDto dto, JwtIssuer issuer, IHttpClientFa
     var secret = dto.Scenario == "bad-secret" ? "wrong-secret" : options.Aspire.ClientSecret;
     var creds = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{options.Aspire.ClientId}:{secret}"));
 
-    var req = new HttpRequestMessage(HttpMethod.Post, options.Aspire.SsoEndpoint)
+    var ssoReq = new HttpRequestMessage(HttpMethod.Post, options.Aspire.SsoEndpoint)
     {
         Content = JsonContent.Create(new { token }),
     };
-    req.Headers.Authorization = new AuthenticationHeaderValue("Basic", creds);
-    req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    ssoReq.Headers.Authorization = new AuthenticationHeaderValue("Basic", creds);
+    ssoReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
     try
     {
-        var res = await httpFactory.CreateClient().SendAsync(req);
+        var res = await httpFactory.CreateClient().SendAsync(ssoReq);
         var body = await res.Content.ReadFromJsonAsync<AspireSsoResult>();
         if (!res.IsSuccessStatusCode || body?.LaunchUrl is null)
             return Results.Json(new { error = body?.Error ?? "SSO handoff failed" }, statusCode: 401);
@@ -130,6 +146,35 @@ app.MapPost("/api/jwt", (JwtReqDto dto, JwtIssuer issuer) =>
     if (user is null) return Results.Json(new { error = "Unknown user" }, statusCode: 400);
     return Results.Json(new { token = issuer.Issue(user, dto.Scenario), scenario = dto.Scenario });
 });
+
+// ---- SAML IdP: the browser lands here; we sign an assertion and auto-POST it to Aspire ----
+app.MapGet("/saml/sso", ([FromQuery] string? code, SamlIdp saml) =>
+{
+    if (code is null || !samlCodes.TryRemove(code, out var c) || c.Exp < DateTimeOffset.UtcNow)
+        return Results.Content("<h3>This sign-in link has expired.</h3>", "text/html");
+
+    var user = FindUser(c.User);
+    if (user is null || !user.Active) return Results.Content("<h3>Not authorised.</h3>", "text/html");
+
+    var acs = options.Aspire.SamlAcsUrl;
+    var samlResponse = saml.BuildSignedResponse(user, acs, c.Scenario, c.Reward);
+
+    // HTTP-POST binding: the browser delivers the assertion for us.
+    return Results.Content($$"""
+        <!doctype html><html><head><meta charset="utf-8"><title>Signing you in…</title></head>
+        <body onload="document.forms[0].submit()" style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">
+          <p>Signing you in…</p>
+          <form method="POST" action="{{acs}}">
+            <input type="hidden" name="SAMLResponse" value="{{samlResponse}}"/>
+            <noscript><button type="submit">Continue</button></noscript>
+          </form>
+        </body></html>
+        """, "text/html");
+});
+
+// ---- IdP metadata: our Entity ID + PUBLIC signing certificate. Aspire fetches this. ----
+app.MapGet("/saml/metadata", (HttpRequest r, SamlIdp saml) =>
+    Results.Content(saml.BuildIdpMetadata($"{r.Scheme}://{r.Host}/saml/sso"), "application/xml"));
 
 app.Run();
 
@@ -158,6 +203,13 @@ static void Validate(ClientOptions o)
     if (o.Tokens.JwtLifetimeSeconds is < 30 or > 300)
         errors.Add($"  Client:Tokens:JwtLifetimeSeconds should be 30-300 (guide recommends 60-120); got {o.Tokens.JwtLifetimeSeconds}");
 
+    // SAML is optional; if either half is configured, both must be.
+    if (!string.IsNullOrWhiteSpace(o.SamlEntityId) || !string.IsNullOrWhiteSpace(o.Aspire.SamlAcsUrl))
+    {
+        Required(o.SamlEntityId, "SamlEntityId", "our SAML IdP identity; must match what Aspire registered");
+        Required(o.Aspire.SamlAcsUrl, "Aspire:SamlAcsUrl", "issued by Aspire; where the browser POSTs the assertion");
+    }
+
     if (o.Users.Count == 0) errors.Add("  Client:Users is empty — nobody can log in");
     if (o.Rewards.Count == 0) errors.Add("  Client:Rewards is empty — nothing to redeem");
 
@@ -169,5 +221,5 @@ static void Validate(ClientOptions o)
 
 record LoginDto(string? Username, string? Password);
 record JwtReqDto(string? Username, string? Scenario);
-record RedeemDto(string? Username, string? RewardId, string? Scenario);
+record RedeemDto(string? Username, string? RewardId, string? Scenario, string? Mode);
 record AspireSsoResult(bool Ok, string? LaunchUrl, string? Via, string? Error);

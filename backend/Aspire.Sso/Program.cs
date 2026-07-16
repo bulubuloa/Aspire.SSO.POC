@@ -28,6 +28,7 @@ builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<JwksCache>();
 builder.Services.AddSingleton<JwtValidator>();
+builder.Services.AddSingleton<SamlValidator>();
 builder.Services.AddHttpClient();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
@@ -54,6 +55,7 @@ app.UseCors();
 
 const string SessionCookie = "aspire_session";
 string Base(HttpRequest r) => $"{r.Scheme}://{r.Host}";
+string AcsUrl(HttpRequest r) => $"{Base(r)}/sso/saml/acs";
 Reward? FindReward(string? id) =>
     rewards.FirstOrDefault(r => string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase));
 
@@ -61,7 +63,7 @@ Reward? FindReward(string? id) =>
 // Back-channel (JSON) callers must present the client credentials we issued them.
 // Browsers (front-channel form POST) are public clients and cannot hold a secret, so they
 // are authenticated by the signed token alone.
-app.MapPost("/sso/jwt", async (HttpRequest req, JwtValidator validator, SessionStore state) =>
+app.MapPost("/sso/jwt", async (HttpRequest req, HttpResponse res, JwtValidator validator, SessionStore state) =>
 {
     var (token, wantsJson) = await ReadToken(req);
     if (string.IsNullOrWhiteSpace(token)) return Fail(wantsJson, "Missing token");
@@ -85,8 +87,45 @@ app.MapPost("/sso/jwt", async (HttpRequest req, JwtValidator validator, SessionS
     if (!state.TryConsumeJti(r.Jti!, r.Exp)) return Fail(wantsJson, "Replay detected (jti already used)");
 
     var session = state.CreateSession(r.User!, "JWT", r.Target, client.ClientId);
-    return Succeed(req, wantsJson, state, session);
+    return Succeed(req, res, wantsJson, state, session);
 });
+
+// ---- SAML Assertion Consumer Service ----
+// The browser POSTs the client's signed assertion here. Unlike /sso/jwt there are no client
+// credentials: a browser is a public client and cannot hold a secret, so the signature is the
+// only proof — which is exactly what SAML is built around.
+app.MapPost("/sso/saml/acs", async (HttpRequest req, HttpResponse res, SamlValidator saml, SessionStore state) =>
+{
+    var form = await req.ReadFormAsync();
+    var samlResponse = form["SAMLResponse"].ToString();
+    if (string.IsNullOrWhiteSpace(samlResponse)) return Fail(false, "Missing SAMLResponse");
+
+    // One onboarded client here; a real SP would resolve it from the assertion's Issuer.
+    var client = options.RegisteredClients[0];
+    var cert = await saml.GetSigningCertAsync(client);
+    if (cert is null) return Fail(false, "Could not retrieve the client's signing certificate");
+
+    var (ok, error, subject, assertionId, exp) = saml.Validate(samlResponse, AcsUrl(req), client, cert);
+
+    // A bad signature may mean they re-keyed behind unchanged metadata — refetch once and retry.
+    if (!ok && error == "Invalid signature")
+    {
+        saml.InvalidateCert(client.SamlMetadataUrl);
+        cert = await saml.GetSigningCertAsync(client);
+        if (cert is not null)
+            (ok, error, subject, assertionId, exp) = saml.Validate(samlResponse, AcsUrl(req), client, cert);
+    }
+    if (!ok) return Fail(false, error!);
+
+    if (!state.TryConsumeSamlId(assertionId!, exp)) return Fail(false, "Replay detected (assertion already used)");
+
+    var session = state.CreateSession(subject!, "SAML", client.ClientId);
+    return Succeed(req, res, false, state, session);
+});
+
+// ---- SP metadata: our Entity ID + ACS URL. The client configures against this. ----
+app.MapGet("/sso/saml/metadata", (HttpRequest req, SamlValidator saml) =>
+    Results.Content(saml.BuildSpMetadata(AcsUrl(req)), "application/xml"));
 
 // ---- The benefit / redeem web-view ----
 app.MapGet("/benefit", (HttpRequest req, HttpResponse res, [FromQuery] string? ticket, SessionStore state) =>
@@ -96,17 +135,7 @@ app.MapGet("/benefit", (HttpRequest req, HttpResponse res, [FromQuery] string? t
         var sid = state.RedeemTicket(ticket);
         if (sid is not null)
         {
-            // Over HTTPS the reward page may be framed by the client's web app on a different
-            // domain, and a Lax cookie would be dropped there. None+Secure is the only combination
-            // browsers send cross-site — and it requires HTTPS, so keep Lax when running locally.
-            var crossSite = req.IsHttps;
-            res.Cookies.Append(SessionCookie, sid, new CookieOptions
-            {
-                HttpOnly = true,
-                Path = "/",
-                Secure = crossSite,
-                SameSite = crossSite ? SameSiteMode.None : SameSiteMode.Lax,
-            });
+            SetSessionCookie(req, res, sid);
             return Results.Redirect("/benefit");   // drop the ticket from the URL
         }
     }
@@ -192,14 +221,34 @@ AspireOptions.RegisteredClient? ClientForToken(string token)
     catch { return null; }
 }
 
-IResult Succeed(HttpRequest req, bool wantsJson, SessionStore state, SessionStore.AspireSession session)
+IResult Succeed(HttpRequest req, HttpResponse res, bool wantsJson, SessionStore state, SessionStore.AspireSession session)
 {
+    // Back-channel caller (JWT): hand back a one-time URL, no cookie — the browser isn't here yet.
     if (wantsJson)
     {
         var ticket = state.IssueTicket(session.Id);
         return Results.Json(new { ok = true, launchUrl = $"{Base(req)}/benefit?ticket={ticket.Code}", via = session.Via });
     }
-    return Results.Content(Pages.SigningIn(session), "text/html");
+    // Front-channel (SAML ACS): the browser IS here, so set the cookie and send it on.
+    // This used to render a page that set document.cookie in JS and redirected to a stale
+    // /aspire/* path — it could not be HttpOnly, never got SameSite=None over HTTPS, and 404'd.
+    SetSessionCookie(req, res, session.Id);
+    return Results.Redirect("/benefit");
+}
+
+// Over HTTPS the reward page may be framed by the client's web app on another domain, and a Lax
+// cookie is dropped there. None+Secure is the only combination browsers send cross-site — and it
+// requires HTTPS, so stay Lax locally.
+void SetSessionCookie(HttpRequest req, HttpResponse res, string sid)
+{
+    var crossSite = req.IsHttps;
+    res.Cookies.Append(SessionCookie, sid, new CookieOptions
+    {
+        HttpOnly = true,
+        Path = "/",
+        Secure = crossSite,
+        SameSite = crossSite ? SameSiteMode.None : SameSiteMode.Lax,
+    });
 }
 
 IResult Fail(bool wantsJson, string error) =>
