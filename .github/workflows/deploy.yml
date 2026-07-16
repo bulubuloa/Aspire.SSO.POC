@@ -56,7 +56,7 @@ jobs:
       - name: Export
         working-directory: mobile
         env:
-          EXPO_PUBLIC_BACKEND_URL: https://client.aspireservice.online
+          EXPO_PUBLIC_BACKEND_URL: https://client.hqauth.shop
         run: CI=1 npx expo export --platform web --output-dir dist
       - uses: actions/upload-artifact@v4
         with:
@@ -113,4 +113,4 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
         run: |
           sleep 20
-          ./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
+          ./deploy.sh verify https://client.hqauth.shop https://aspire.hqauth.shop

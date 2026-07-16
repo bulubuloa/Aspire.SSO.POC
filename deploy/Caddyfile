@@ -7,19 +7,19 @@
 }
 
 # ── The client's system ───────────────────────────────────────
-client.aspireservice.online {
+client.hqauth.shop {
 	reverse_proxy client:8080
 	encode gzip
 }
 
 # ── Aspire's SSO ──────────────────────────────────────────────
-aspire.aspireservice.online {
+aspire.hqauth.shop {
 	reverse_proxy aspire:8080
 	encode gzip
 }
 
 # ── The Expo web build (static) ───────────────────────────────
-demo.aspireservice.online {
+demo.hqauth.shop {
 	root * /srv/demo
 	encode gzip
 	# Expo web is a single-page app — unknown paths must still serve index.html.

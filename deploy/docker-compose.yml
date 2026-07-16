@@ -27,10 +27,10 @@ services:
       PORT: 8080
       # Only 1 core — Server GC pre-allocates per-core heaps for no benefit here.
       DOTNET_gcServer: "0"
-      Client__Aspire__SsoEndpoint: "https://aspire.aspireservice.online/sso/jwt"
+      Client__Aspire__SsoEndpoint: "https://aspire.hqauth.shop/sso/jwt"
       # The browser POSTs the assertion here, so it must be the PUBLIC url — a container-local
       # one would send the customer's browser to localhost.
-      Client__Aspire__SamlAcsUrl: "https://aspire.aspireservice.online/sso/saml/acs"
+      Client__Aspire__SamlAcsUrl: "https://aspire.hqauth.shop/sso/saml/acs"
       Client__Aspire__ClientSecret: ${CLIENT_SECRET:?set CLIENT_SECRET in .env}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/rewards"]
@@ -44,10 +44,10 @@ services:
     environment:
       PORT: 8080
       DOTNET_gcServer: "0"
-      Aspire__RegisteredClients__0__JwksUrl: "https://client.aspireservice.online/.well-known/jwks.json"
+      Aspire__RegisteredClients__0__JwksUrl: "https://client.hqauth.shop/.well-known/jwks.json"
       # Fetched server-to-server for the client's SAML signing cert. Every localhost url in
       # appsettings.json needs an override here or it silently breaks in prod.
-      Aspire__RegisteredClients__0__SamlMetadataUrl: "https://client.aspireservice.online/saml/metadata"
+      Aspire__RegisteredClients__0__SamlMetadataUrl: "https://client.hqauth.shop/saml/metadata"
       Aspire__RegisteredClients__0__ClientSecret: ${CLIENT_SECRET:?}    # must match the client's
       Aspire__RegisteredClients__0__ReturnUrl: "democlient://redeemed"
     healthcheck:

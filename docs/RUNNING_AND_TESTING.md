@@ -3,7 +3,7 @@
 Two flows: **login** and **redeem**. Redeem runs over **JWT or SAML** — switchable in the app.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how they work.
 
-**Live:** <https://demo.aspireservice.online>
+**Live:** <https://demo.hqauth.shop>
 
 ## Prerequisites
 
@@ -300,8 +300,8 @@ CI deploys on every push to `main` — see [`ARCHITECTURE.md` §9](ARCHITECTURE.
 
 ```bash
 ./deploy.sh check                      # build everything locally first
-./deploy.sh urls aspireservice.online  # env vars for a domain
-CLIENT_SECRET=… ./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
+./deploy.sh urls hqauth.shop  # env vars for a domain
+CLIENT_SECRET=… ./deploy.sh verify https://client.hqauth.shop https://aspire.hqauth.shop
 ```
 
 `verify` checks the two things that only fail in production — `launchUrl` comes back `https`

@@ -6,7 +6,7 @@ lands inside an Aspire reward page, already authenticated — **without ever see
 Two flows: **login** (client-owned) and **redeem** (the SSO handoff).
 Redeem runs over **either JWT or SAML 2.0** — both from the client guides, switchable at runtime.
 
-**Live:** <https://demo.aspireservice.online>
+**Live:** <https://demo.hqauth.shop>
 
 ---
 
@@ -258,9 +258,9 @@ push main → CI (34 tests) → images → ghcr.io → VPS pulls → deploy.sh v
 
 | Host | |
 |---|---|
-| `client.aspireservice.online` | Client.Demo |
-| `aspire.aspireservice.online` | Aspire.Sso |
-| `demo.aspireservice.online` | Expo web export (static, served by Caddy) |
+| `client.hqauth.shop` | Client.Demo |
+| `aspire.hqauth.shop` | Aspire.Sso |
+| `demo.hqauth.shop` | Expo web export (static, served by Caddy) |
 
 `DOTNET_gcServer=0` on both — Server GC pre-allocates per-core heaps, pointless on 1 core. Each
 service idles at ~16MB.

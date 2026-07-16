@@ -6,7 +6,7 @@ inside an Aspire reward page, already authenticated — **without ever seeing an
 Implements **both** paths from the client guides — **JWT** and **SAML 2.0** — switchable at runtime.
 Two flows: **login** (client-owned) and **redeem** (the SSO handoff).
 
-**Live:** <https://demo.aspireservice.online>
+**Live:** <https://demo.hqauth.shop>
 
 ---
 
@@ -85,7 +85,7 @@ the point; the reward page shows a `VIA JWT` / `VIA SAML` badge so you can tell 
 
 ## Deploy
 
-Live at **https://demo.aspireservice.online** (client `client.` · Aspire `aspire.`).
+Live at **https://demo.hqauth.shop** (client `client.` · Aspire `aspire.`).
 
 Hosted on a small VPS behind **Caddy** (automatic Let's Encrypt). Images are built by CI and
 pulled by the box — a 1GB VPS cannot compile .NET without OOMing.
@@ -103,5 +103,5 @@ pulls → `deploy.sh verify` confirms it is live.
 ```bash
 ./deploy-vps.sh status     # on the box: containers, memory, endpoint codes
 ./deploy-vps.sh logs       # tail
-./deploy.sh verify https://client.aspireservice.online https://aspire.aspireservice.online
+./deploy.sh verify https://client.hqauth.shop https://aspire.hqauth.shop
 ```

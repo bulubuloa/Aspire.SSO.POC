@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-DOMAIN=aspireservice.online
+DOMAIN=hqauth.shop
 APP_DIR=/opt/sso
 GH_OWNER=bulubuloa
 
