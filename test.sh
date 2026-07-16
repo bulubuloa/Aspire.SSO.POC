@@ -112,6 +112,12 @@ SR=$(saml_launch "")
 check "redeem mode=saml → signed assertion" "<saml:Assertion" "$(echo "$SR" | base64 -d 2>/dev/null)"
 check "  …assertion is signed"              "SignatureValue"  "$(echo "$SR" | base64 -d 2>/dev/null)"
 
+# saml_launch POSTs the assertion itself, so it would still pass with a form pointing at
+# localhost. Check the action the BROWSER is handed — that is what shipped broken to prod.
+SFORM=$(curl -s "$(redeem '{"username":"jane","rewardId":"lounge","mode":"saml"}' \
+        | python3 -c "import sys,json;print(json.load(sys.stdin)['launchUrl'])")" | grep -oE '<form[^>]*>')
+check "  …form POSTs to the real ACS"       "$A/sso/saml/acs" "$SFORM"
+
 if [ -n "$SR" ]; then
   sjar=$(mktemp)
   curl -s -c "$sjar" -o /dev/null -X POST "$A/sso/saml/acs" --data-urlencode "SAMLResponse=$SR"
