@@ -253,7 +253,7 @@ VPS + **Caddy** (automatic Let's Encrypt). Images are built by CI and pulled by 
 cannot compile .NET without OOMing.
 
 ```
-push main → CI (34 tests) → images → ghcr.io → VPS pulls → deploy.sh verify
+push main → CI (49 tests) → images → ghcr.io → VPS pulls → deploy.sh verify
 ```
 
 | Host | |
@@ -322,6 +322,7 @@ backend/Client.Demo/          :5001 — the client's system
   ClientKeys.cs               RSA key + X509 cert (PRIVATE — never leave)
   Jwt/JwtIssuer.cs            mints the signed token
   Saml/SamlIdp.cs             signs assertions (XML-DSig, exclusive C14N)
+  wwwroot/index.html          no-build web app (served at :5001, no npx)
   appsettings.json            issuer, kid, Aspire contract, users, rewards
 
 backend/Aspire.Sso/           :6001 — our SSO
@@ -342,10 +343,12 @@ mobile/                       the client's app
   src/RewardBrowser.js        web-only in-page overlay
   src/theme.js                "Demo Client" tokens (blue)
 
+standalone/client-demo.html   the no-build web app (mirror of wwwroot/index.html)
+run-local.sh                  run both backends locally (http | https)
 deploy/                       Caddyfile + docker-compose.yml (run on the VPS)
 deploy-vps.sh                 one-time box bootstrap
 deploy.sh                     check / urls / verify
-test.sh                       34 end-to-end checks
+test.sh                       49 end-to-end checks (JWT + SAML)
 ```
 
 See [`RUNNING_AND_TESTING.md`](RUNNING_AND_TESTING.md) to run it.

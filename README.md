@@ -17,7 +17,9 @@ Two flows: **login** (client-owned) and **redeem** (the SSO handoff).
 | `backend/Client.Demo` | **The client's system** (`:5001`). Own auth + users, rewards, RSA private key, signs the JWT. |
 | `backend/Aspire.Sso` | **Our SSO** (`:6001`). Validates client-signed tokens via their JWKS URL, sessions + replay, reward page. No users, no passwords, no signing key. |
 | `mobile/` | **Expo / React Native** — the client's app: its own login, and REDEEM triggering the silent handoff. |
-| `test.sh` | 34 end-to-end checks |
+| `backend/Client.Demo/wwwroot/` | **No-build web** — the same demo as a single HTML page served by the client backend. No npx, no install; open `localhost:5001`. Mirror in `standalone/`. |
+| `run-local.sh` | Runs both backends locally (`http`, or `https` for the embedded-iframe demo). |
+| `test.sh` | 49 end-to-end checks (JWT + SAML) |
 | `docs/` | Architecture + how to run |
 
 ## Architecture in one picture
@@ -42,8 +44,17 @@ Neither can reach the other's internals — `:6001/api/login` and `:5001/benefit
 cd backend/Aspire.Sso  && dotnet run    # :6001  — our SSO
 cd backend/Client.Demo && dotnet run    # :5001  — the client's system
 
-./test.sh                               # 34 checks
+./test.sh                               # 49 checks (JWT + SAML)
+```
 
+Then run the app **either** way:
+
+```bash
+# A) No-build web — dotnet only, no npx. Open the printed URL.
+./run-local.sh https        # both backends over HTTPS → https://localhost:5001/  (redeem embeds in-app)
+./run-local.sh              # or plain HTTP → http://localhost:5001/  (redeem opens a new tab)
+
+# B) Expo app — needs Node + Expo
 cd mobile && npm install
 npx expo start --web        # browser — fastest; or --ios / --android
 ```
@@ -65,7 +76,7 @@ the point; the reward page shows a `VIA JWT` / `VIA SAML` badge so you can tell 
 
 ## Verified
 
-`./test.sh` — 34 checks:
+`./test.sh` — 49 checks (JWT + SAML):
 
 | | |
 |---|---|
@@ -97,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/bulubuloa/Aspire.SSO.POC/main/deplo
 Sets up swap, Docker, ufw, and `/opt/sso/.env` (generates the client secret). Then point three
 A records at the box and add `VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` as GitHub secrets.
 
-**After that it is automatic** — push to `main` → CI runs the 34 tests → images build → the VPS
+**After that it is automatic** — push to `main` → CI runs the 49 tests → images build → the VPS
 pulls → `deploy.sh verify` confirms it is live.
 
 ```bash
