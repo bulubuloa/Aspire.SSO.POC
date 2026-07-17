@@ -1,0 +1,2 @@
+# Client.Demo serves no static files, but ASP.NET's static-web-assets loader
+# expects this folder to exist in Development (Rider/VS). Keep it present.

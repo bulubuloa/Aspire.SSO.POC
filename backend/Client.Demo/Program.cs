@@ -51,6 +51,12 @@ app.UseForwardedHeaders(fwd);
 
 app.UseCors();
 
+// Serve the no-build HTML app from wwwroot/ (open http://localhost:5001/). Serving it here —
+// rather than file:// — keeps it same-site with Aspire (both localhost), so the SAML/JWT session
+// cookie survives the iframe redirect. Opened as file:// the handoff is cross-site and the cookie is dropped.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 // SAML needs the browser to visit our IdP, but the user's identity must not ride in the URL.
 // A one-time 60s code carries it — same reasoning as Aspire's launch ticket.
 var samlCodes = new System.Collections.Concurrent.ConcurrentDictionary<string,
