@@ -30,3 +30,7 @@ appsettings.Production.json
 # "Draft for internal review before client sharing" — they are not
 # ours to publish. Remove this rule only if that has been cleared.
 *.docx
+
+# JetBrains Rider / IntelliJ
+.idea/
+**/.idea/
