@@ -90,6 +90,7 @@ the point; the reward page shows a `VIA JWT` / `VIA SAML` badge so you can tell 
 ## Docs
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the two flows, trust boundary, token contract, design decisions, open questions.
+- [`docs/CLIENT_INTEGRATION.md`](docs/CLIENT_INTEGRATION.md) — onboarding checklist: what to ask a client for (JWT & SAML), what you give back, runtime payloads.
 - [`docs/RUNNING_AND_TESTING.md`](docs/RUNNING_AND_TESTING.md) — run both services + the app, `./test.sh`, troubleshooting.
 
 ---
